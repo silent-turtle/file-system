@@ -18,10 +18,11 @@ instance Show Tree where
           showChildren [x] = show x
           showChildren (x:xs) = show x ++ ", " ++ showChildren xs
 
--- using these for testing
---
-file = File "file.txt" "Hello!"
-file2 = File "file2.txt" "Bye!"
+serialise :: Tree -> IO ()
+serialise tree = writeFile "test.txt" (show tree)
+
+deserialise :: IO Tree
+deserialise = fmap (read @Tree) (readFile "test.txt")  
 
 root = Directory "/" [(Directory "home/" [(Leaf file)]), (Leaf file2)] 
 
