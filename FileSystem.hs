@@ -1,9 +1,13 @@
-data File = File { filename :: String, content :: String }
+{-# LANGUAGE TypeApplications #-}
+
+data File = File [String]
+  deriving (Show, Read)
 
 data Tree =
   Empty
   | Leaf File 
   | Directory String [Tree]
+  deriving (Show, Read)
 
 instance Show Tree where
   show Empty = "{}" 
