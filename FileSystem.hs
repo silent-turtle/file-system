@@ -21,11 +21,11 @@ createPair :: Path -> FileSystem -> IO (Path, FileSystem)
 createPair dir fs = return (dir, fs)
 
 loop :: (Path, FileSystem) -> IO (Path, FileSystem)
-loop s = do
-  putStr "$ "
+loop (path, fs) = do
+  putStr (path ++ "$ ")
   command <- getLine
   splitCommand <- splitByDelimeter command ' '
-  s' <- magic s splitCommand 
+  s' <- magic (path, fs) splitCommand 
   loop s'
 
 serialise :: FileSystem -> IO ()
@@ -42,6 +42,15 @@ splitByDelimeter str del = return (splitHelper str del [])
           where rest' = dropWhile (\x -> x /= del) s
                 rest = if null rest' then [] else (tail rest')
 
+filterPath :: [String] -> IO [String]
+filterPath path = return (filterPathHelper path [])
+  where filterPathHelper :: [String] -> [String] -> [String]
+        filterPathHelper [] res = reverse res
+        filterPathHelper [x] res = filterPathHelper [] (x: res)
+        filterPathHelper ("":"..":xs) res = filterPathHelper xs ("":res)
+        filterPathHelper (_:"..":xs) res = filterPathHelper xs res
+        filterPathHelper (x:xs) res = filterPathHelper xs (x:res)
+
 magic :: (String, FileSystem) -> [String] -> IO (String, FileSystem)
 magic s [] = do
   return s
@@ -49,39 +58,59 @@ magic s ("pwd":args) = do
   pwd s
 magic (wdir, fs) ["ls"] = do
   (x:currpath) <- splitByDelimeter wdir '/'
-  ls (wdir, fs) [] (["/"] ++ currpath) (Just fs)
+  search (wdir, fs) [] (["/"] ++ currpath) ls (Just fs)
 magic (wdir, fs) ["ls", arg] = do 
-  (x:argpath) <- splitByDelimeter arg '/'
+  argpath <- splitByDelimeter arg '/'
+  (x:filteredPath) <- filterPath argpath
   if (x == "") then 
-    ls (wdir, fs) ("/" ++ (intercalate "/" argpath)) (["/"] ++ argpath) (Just fs)
+    search (wdir, fs) ("/" ++ (intercalate "/" filteredPath)) (["/"] ++ filteredPath) ls (Just fs)
   else do
     (y:currpath) <- splitByDelimeter wdir '/'
-    ls (wdir, fs) arg (["/"] ++ currpath ++ (x:argpath)) (Just fs)
+    search (wdir, fs) arg (["/"] ++ currpath ++ (x:filteredPath)) ls (Just fs)
+magic (_, fs) ["cd"] = do
+  return ("/", fs)
+magic (wdir, fs) ["cd", arg] = do
+  (x:argpath) <- splitByDelimeter arg '/'
+  if (x == "") then do
+    (y:filteredPath) <- filterPath (x:argpath)
+    search (wdir, fs) ("/" ++ (intercalate "/" filteredPath)) (["/"] ++ filteredPath) cd (Just fs)
+  else do
+    (y:currpath) <- splitByDelimeter wdir '/'
+    (z:filteredPath) <- filterPath ((y:currpath) ++ (x:argpath)) 
+    search (wdir, fs) ((intercalate "/" (z:filteredPath)) ++ "/") (["/"] ++ filteredPath) cd (Just fs)
+
+search :: (Path, FileSystem) -> String -> [String] -> ((Path, FileSystem) -> String -> FileSystem -> IO (Path, FileSystem)) -> Maybe FileSystem -> IO (Path, FileSystem)
+search s msg _ _ Nothing = putStr ("Cannot access \'" ++ msg ++ "\': No such file or directory\n") >> return s
+search s msg [x] f (Just (Regular file))
+  | x == fileName file = f s msg (Regular file)
+  | otherwise = search s msg [] f Nothing
+search s msg [x] f (Just (Directory dir))
+  | x == dirName dir = f s msg (Directory dir)
+  | otherwise = search s msg [] f Nothing
+search s msg (x:y:xs) f (Just (Directory dir))
+  | x == dirName dir = search s msg (y:xs) f (find y (dirContent dir))
+  | otherwise = search s msg [] f Nothing
+  where find str [] = Nothing
+        find str (Regular file : dirs)
+          | fileName file == str = Just (Regular file)
+          | otherwise = find str dirs
+        find str (Directory dir : dirs)
+          | dirName dir == str = Just (Directory dir)
+          | otherwise = find str dirs
 
 pwd :: (Path, FileSystem) -> IO (Path, FileSystem)
 pwd (str, fs) = putStr (str ++ "\n") >> return (str, fs)
 
-ls :: (Path, FileSystem) -> String -> [String] -> Maybe FileSystem -> IO (Path, FileSystem)
-ls s msg _ Nothing = putStr ("Cannot acces \'" ++ msg ++ "\': No such file or directory\n") >> return s
-ls s msg [x] (Just (Regular file))
-  | x == (fileName file) = putStr ((fileName file) ++ "\n") >> return s
-  | otherwise = ls s msg [] Nothing
-ls s msg [x] (Just (Directory dir))  
-  | x == (dirName dir) = printAll (dirContent dir) >> return s
-  | otherwise = ls s msg [] Nothing
+ls :: (Path, FileSystem) -> String -> FileSystem -> IO (Path, FileSystem)
+ls s _ (Regular file) = putStr (fileName file ++ "\n") >> return s
+ls s _ (Directory dir) = printAll (dirContent dir) >> return s
   where printAll [] = putStr "\n"
-        printAll ((Regular x):dir) = putStr (fileName x ++ "  ") >> printAll dir
-        printAll ((Directory d):dir) = putStr ((dirName d) ++ "  ") >> printAll dir
-ls s msg (x:xs) (Just (Directory dir)) 
-  | x == (dirName dir) =  ls s msg xs (find (head xs) (dirContent dir))
-  | otherwise = ls s msg [] Nothing
-  where find str [] = Nothing
-        find str ((Regular file):dirs) 
-          | fileName file == str = Just (Regular file)
-          | otherwise = find str dirs
-        find str ((Directory dir):dirs) 
-          | dirName dir == str = Just (Directory dir)
-          | otherwise = find str dirs 
+        printAll (Regular x : dir) = putStr (fileName x ++ "  ") >> printAll dir
+        printAll (Directory d : dir) = putStr (dirName d ++ "  ") >> printAll dir 
+
+cd :: (Path, FileSystem) -> String -> FileSystem -> IO (Path, FileSystem)
+cd (path, fs) newpath (Regular file) = putStr ("cd: \'" ++ newpath ++ "\': Not a directory\n") >> return (path, fs)
+cd (_, fs) newpath (Directory dir) = return (newpath, fs) 
 
 -- using these for testing
 --
