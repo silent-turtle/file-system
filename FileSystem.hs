@@ -51,6 +51,16 @@ filterPath path = return (filterPathHelper path [])
         filterPathHelper (_:"..":xs) res = filterPathHelper xs res
         filterPathHelper (x:xs) res = filterPathHelper xs (x:res)
 
+mix :: String -> String -> IO [String]
+mix wdir arg = do
+  (x:argpath) <- splitByDelimeter arg '/'
+  if (x == "") then do
+    filterPath (x:argpath)
+  else do
+    currpath <- splitByDelimeter wdir '/'
+    filterPath (currpath ++ (x:argpath))
+  
+
 magic :: (String, FileSystem) -> [String] -> IO (String, FileSystem)
 magic s [] = do
   return s
@@ -60,24 +70,13 @@ magic (wdir, fs) ["ls"] = do
   (x:currpath) <- splitByDelimeter wdir '/'
   search (wdir, fs) [] (["/"] ++ currpath) ls (Just fs)
 magic (wdir, fs) ["ls", arg] = do 
-  argpath <- splitByDelimeter arg '/'
-  (x:filteredPath) <- filterPath argpath
-  if (x == "") then 
-    search (wdir, fs) ("/" ++ (intercalate "/" filteredPath)) (["/"] ++ filteredPath) ls (Just fs)
-  else do
-    (y:currpath) <- splitByDelimeter wdir '/'
-    search (wdir, fs) arg (["/"] ++ currpath ++ (x:filteredPath)) ls (Just fs)
+  (z:filteredPath) <- mix wdir arg
+  search (wdir, fs) arg (["/"] ++ filteredPath) ls (Just fs)
 magic (_, fs) ["cd"] = do
   return ("/", fs)
 magic (wdir, fs) ["cd", arg] = do
-  (x:argpath) <- splitByDelimeter arg '/'
-  if (x == "") then do
-    (y:filteredPath) <- filterPath (x:argpath)
-    search (wdir, fs) ("/" ++ (intercalate "/" filteredPath)) (["/"] ++ filteredPath) cd (Just fs)
-  else do
-    (y:currpath) <- splitByDelimeter wdir '/'
-    (z:filteredPath) <- filterPath ((y:currpath) ++ (x:argpath)) 
-    search (wdir, fs) ((intercalate "/" (z:filteredPath)) ++ "/") (["/"] ++ filteredPath) cd (Just fs)
+  (z:filteredPath) <- mix wdir arg 
+  search (wdir, fs) ((intercalate "/" (z:filteredPath)) ++ "/")  (["/"] ++ filteredPath) cd (Just fs)
 
 search :: (Path, FileSystem) -> String -> [String] -> ((Path, FileSystem) -> String -> FileSystem -> IO (Path, FileSystem)) -> Maybe FileSystem -> IO (Path, FileSystem)
 search s msg _ _ Nothing = putStr ("Cannot access \'" ++ msg ++ "\': No such file or directory\n") >> return s
