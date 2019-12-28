@@ -1,4 +1,7 @@
 {-# LANGUAGE TypeApplications #-}
+{-# OPTIONS_GHC -Wall #-}
+{-# OPTIONS_GHC -Werror #-}
+
 
 import Data.List
 
@@ -24,7 +27,7 @@ loop :: (Path, FileSystem) -> IO (Path, FileSystem)
 loop (path, fs) = do
   putStr (path ++ "$ ")
   command <- getLine
-  splitCommand <- splitByDelimeter command ' '
+  splitCommand <- return (splitByDelimeter command ' ')
   s' <- magic (path, fs) splitCommand 
   loop s'
 
@@ -34,16 +37,16 @@ serialise fs = writeFile "test.txt" (show fs)
 deserialise :: IO FileSystem 
 deserialise = read <$> (readFile "test.txt")  
 
-splitByDelimeter :: String -> Char -> IO [String]
-splitByDelimeter str del = return (splitHelper str del []) 
+splitByDelimeter :: String -> Char -> [String]
+splitByDelimeter str del = splitHelper str del [] 
   where splitHelper :: String -> Char -> [String] -> [String]
         splitHelper "" _ res = reverse res
         splitHelper s d res = splitHelper rest d (takeWhile (\x -> x /= del) s : res) 
           where rest' = dropWhile (\x -> x /= del) s
                 rest = if null rest' then [] else (tail rest')
 
-filterPath :: [String] -> IO [String]
-filterPath path = return (filterPathHelper path [])
+filterPath :: [String] -> [String]
+filterPath path = filterPathHelper path []
   where filterPathHelper :: [String] -> [String] -> [String]
         filterPathHelper [] res = reverse res
         filterPathHelper [x] res = filterPathHelper [] (x: res)
@@ -53,12 +56,12 @@ filterPath path = return (filterPathHelper path [])
 
 mix :: String -> String -> IO [String]
 mix wdir arg = do
-  (x:argpath) <- splitByDelimeter arg '/'
+  (x:argpath) <- return (splitByDelimeter arg '/')
   if (x == "") then do
-    filterPath (x:argpath)
+    return (filterPath (x:argpath))
   else do
-    currpath <- splitByDelimeter wdir '/'
-    filterPath (currpath ++ (x:argpath))
+    currpath <- return (splitByDelimeter wdir '/')
+    return (filterPath (currpath ++ (x:argpath)))
   
 
 magic :: (String, FileSystem) -> [String] -> IO (String, FileSystem)
@@ -67,16 +70,41 @@ magic s [] = do
 magic s ("pwd":args) = do
   pwd s
 magic (wdir, fs) ["ls"] = do
-  (x:currpath) <- splitByDelimeter wdir '/'
+  (x:currpath) <- return (splitByDelimeter wdir '/')
   search (wdir, fs) [] (["/"] ++ currpath) ls (Just fs)
 magic (wdir, fs) ["ls", arg] = do 
-  (z:filteredPath) <- mix wdir arg
+  (x:filteredPath) <- mix wdir arg
   search (wdir, fs) arg (["/"] ++ filteredPath) ls (Just fs)
 magic (_, fs) ["cd"] = do
   return ("/", fs)
 magic (wdir, fs) ["cd", arg] = do
-  (z:filteredPath) <- mix wdir arg 
-  search (wdir, fs) ((intercalate "/" (z:filteredPath)) ++ "/")  (["/"] ++ filteredPath) cd (Just fs)
+  (x:filteredPath) <- mix wdir arg 
+  search (wdir, fs) ((intercalate "/" (x:filteredPath)) ++ "/")  (["/"] ++ filteredPath) cd (Just fs)
+magic s ["cat"] = do
+  x <- getLine 
+  go x
+  where go "." = return s
+        go str = do
+          putStrLn str 
+          str <- getLine
+          go str 
+magic (wdir, fs) ["cat", arg] = do
+  (x:filteredPath) <- mix wdir arg
+  search (wdir, fs) ((intercalate "/" (x:filteredPath)) ++ "/") (["/"] ++ filteredPath) cat (Just fs) 
+magic (wdir, fs) ("cat":arg:args) = do
+  (x:filteredPath) <- mix wdir arg
+  s' <- search (wdir, fs) ((intercalate "/" (x:filteredPath)) ++ "/") (["/"] ++ filteredPath) cat (Just fs)
+  magic s' ("cat":args)
+magic s ["rm"] = do
+  putStrLn "rm: missing operand"
+  return s
+magic (wdir, fs) ["rm", arg] = do 
+  (x:filteredPath) <- mix wdir arg
+  search (wdir, fs) (intercalate "/" (x:filteredPath)) (["/"] ++ filteredPath) rm (Just fs)
+magic (wdir, fs) ("rm":arg:args) = do
+  (x:filteredPath) <- mix wdir arg
+  s' <- search (wdir, fs) (intercalate "/" (x:filteredPath)) (["/"] ++ filteredPath) rm (Just fs)
+  magic s' ("rm":args)   
 
 search :: (Path, FileSystem) -> String -> [String] -> ((Path, FileSystem) -> String -> FileSystem -> IO (Path, FileSystem)) -> Maybe FileSystem -> IO (Path, FileSystem)
 search s msg _ _ Nothing = putStr ("Cannot access \'" ++ msg ++ "\': No such file or directory\n") >> return s
@@ -111,8 +139,36 @@ cd :: (Path, FileSystem) -> String -> FileSystem -> IO (Path, FileSystem)
 cd (path, fs) newpath (Regular file) = putStr ("cd: \'" ++ newpath ++ "\': Not a directory\n") >> return (path, fs)
 cd (_, fs) newpath (Directory dir) = return (newpath, fs) 
 
+cat :: (Path, FileSystem) -> String -> FileSystem -> IO (Path, FileSystem)
+cat s msg (Directory dir) = putStr ("cat: \'" ++ msg ++ "\': Is a directory\n") >> return s
+cat s _ (Regular file) = putStr ((fileContent file) ++ "\n") >> return s
+
+rm :: (Path, FileSystem) -> String -> FileSystem -> IO (Path, FileSystem)
+rm s msg (Directory dir) = putStr ("rm: cannot remove \'" ++ msg ++ "\': is directory") >> return s
+rm (wdir, fs) msg (Regular file) = return (wdir, fs')
+  where (x:path) = splitByDelimeter msg '/' 
+        fs' = copyFrom fs path 
+        copyFrom :: FileSystem -> [String] -> FileSystem
+        copyFrom (Directory d) [file] = Directory (Dir (dirName d) (deleteFile file (dirContent d)))
+        copyFrom (Regular f) _ = Regular f
+        copyFrom (Directory (Dir name [])) _ = Directory (Dir name [])
+        copyFrom (Directory (Dir name content)) (x:xs) = Directory (Dir name (copyDirContent content (x:xs)))
+        copyDirContent :: [FileSystem] -> [String] -> [FileSystem]
+        copyDirContent [Regular f] (y:ys) = [copyFrom (Regular f) (y:ys)]
+        copyDirContent [Directory d] (y:ys) = if dirName d == y then [copyFrom (Directory d) ys] else [copyFrom (Directory d) (y:ys)] 
+        copyDirContent (Regular f : cont) (y:ys) = copyFrom (Regular f) (y:ys) : copyDirContent cont (y:ys) 
+        copyDirContent (Directory d : cont) (y:ys)
+          | dirName d == y = copyFrom (Directory d) ys : copyDirContent cont (y:ys)
+          | otherwise = copyFrom (Directory d) (y:ys) : copyDirContent cont (y:ys)
+        deleteFile :: String -> [FileSystem] -> [FileSystem]
+        deleteFile _ [] = []
+        deleteFile name (Regular f : cont) 
+          | name == fileName f = deleteFile name cont 
+          | otherwise = Regular f : deleteFile name cont 
+        deleteFile name (Directory d : cont) = Directory d : deleteFile name cont 
+
 -- using these for testing
 --
-file = RegularFile "file1.txt" "Hello" 
-file2 = RegularFile "file2.txt" "Bye!"
-root = Directory (Dir "/" [Directory (Dir "home" [Regular file, Directory (Dir "etc" [Regular file2])]), Regular file2]) 
+-- file = RegularFile "file1.txt" "Hello" 
+-- file2 = RegularFile "file2.txt" "Bye!"
+-- root = Directory (Dir "/" [Directory (Dir "home" [Regular file, Directory (Dir "etc" [Regular file2])]), Regular file2]) 
