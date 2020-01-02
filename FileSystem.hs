@@ -93,30 +93,17 @@ magic s ["cat"] = do
           putStrLn str 
           str' <- getLine
           go str' 
--- magic (wdir, fs) ["cat", arg] = do
---   (x:filteredPath) <- mix wdir arg
---   (res, fs') <- search fs (intercalate "/" (x:filteredPath) ++ "/") ("/" : filteredPath) getContent (Just fs)
---   putStr res
---   return (wdir, fs')
--- magic (wdir, fs) ("cat":arg:args) = do
---   (x:filteredPath) <- mix wdir arg
---   (res, fs') <- search fs (intercalate "/" (x:filteredPath) ++ "/") ("/" : filteredPath) getContent (Just fs)
---   putStr res
---   magic (wdir, fs') ("cat":args)
-
 magic (wdir, fs) ("cat":arg:args) = do
   go [] (arg:args)
   where go :: String -> [String] -> IO (String, FileSystem) 
         go content [] = putStrLn content >> return (wdir, fs)
         go content [">", file] = do
           (_:fpath) <- mix wdir file
-         -- putStrLn ("\"" ++ content ++ "\"")
           return (wdir, fCopy fs content fpath catToFile)
         go _ (">":_) = do
           putStrLn "error: should have only one output file"
           return (wdir, fs)
         go content (x:xs) = do
-         -- putStrLn ("\"" ++ content ++ "\"")
           (y:path) <- mix wdir x 
           (res, _) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
           go (content ++ res ++ "\n") xs 
