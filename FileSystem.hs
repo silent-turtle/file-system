@@ -3,6 +3,7 @@
 
 
 import Data.List
+import qualified Data.List.NonEmpty as N
 
 type Path = String
 data RegularFile = RegularFile { fileName :: String, fileContent :: String } deriving (Show, Read)
@@ -12,6 +13,13 @@ data FileSystem
   = Regular RegularFile 
   | Directory Dir
   deriving (Show, Read)
+
+data Command
+  = Pwd
+  | Ls [Path]
+  | Cd (Maybe Path)
+  | Cat [Path]
+  | Rm (N.NonEmpty Path)
 
 main :: IO ()
 main = do
@@ -23,13 +31,30 @@ main = do
 createPair :: Path -> FileSystem -> IO (Path, FileSystem)
 createPair dir fs = return (dir, fs)
 
+parseCommand :: [String] -> Either String Command
+parseCommand ("pwd":_) = Right Pwd
+parseCommand ("ls":path) = Right (Ls path)
+parseCommand ["cd"] = Right (Cd Nothing)
+parseCommand ["cd", path] = Right (Cd (Just path))
+parseCommand ("cd":_) = Left "cd: too many arguments"
+parseCommand ("cat":files) = Right (Cat files)
+parseCommand ["rm"] = Left "rm: missing operand" 
+parseCommand ("rm": x : xs) = Right (Rm (x N.:| xs))
+parseCommand [] = Left ""
+parseCommand _ = Left "invalid command"
+
 loop :: (Path, FileSystem) -> IO (Path, FileSystem)
 loop (path, fs) = do
   putStr (path ++ "$ ")
   command <- getLine
   let splitCommand = splitByDelimeter command ' '
-  s' <- magic (path, fs) splitCommand 
-  loop s'
+  case parseCommand splitCommand of
+    Left message -> do
+      putStr message
+      loop (path, fs)
+    Right cmd -> do 
+      s' <- magic (path, fs) cmd 
+      loop s'
 
 serialise :: FileSystem -> IO ()
 serialise fs = writeFile "test.txt" (show fs)
@@ -62,30 +87,37 @@ mix wdir arg = do
   else do
     let currpath = splitByDelimeter wdir '/'
     return (filterPath (currpath ++ (x : argpath)))
-  
+ 
 
-magic :: (String, FileSystem) -> [String] -> IO (String, FileSystem)
-magic s [] = return s
-magic s ("pwd":_) = pwd s
-magic (wdir, fs) ["ls"] = do
+magic :: (String, FileSystem) -> Command -> IO (String, FileSystem)
+magic s Pwd = pwd s
+magic (wdir, fs) (Ls []) = do
   (_:currpath) <- return (splitByDelimeter wdir '/')
   (res,fs') <- search fs [] ("/" : currpath) ls (Just fs)
   putStr res
   return (wdir, fs')
-magic (wdir, fs) ["ls", arg] = do 
+magic (wdir, fs) (Ls [arg]) = do
   (_:filteredPath) <- mix wdir arg
   (res, fs') <- search fs arg ("/" : filteredPath) ls (Just fs)
   putStr res
-  return (wdir, fs') 
-magic (_, fs) ["cd"] = return ("/", fs)
-magic (wdir, fs) ["cd", arg] = do
+  return (wdir, fs')
+magic (wdir, fs) (Ls (arg:args)) = do
+  go (arg:args)
+  where go [] = return (wdir, fs)
+        go (x:xs) = do
+          (_:filteredPath) <- mix wdir x
+          (res, _) <- search fs x ("/" : filteredPath) ls (Just fs)
+          putStr (x ++ ":\n" ++ res)
+          go xs
+magic (_, fs) (Cd Nothing) = return ("/", fs)
+magic (wdir, fs) (Cd (Just arg)) = do
   (x:filteredPath) <- mix wdir arg 
   (wdir', fs') <-search fs (intercalate "/" (x:filteredPath) ++ "/")  ("/" : filteredPath) cd (Just fs)
   if null wdir' then
     return (wdir, fs')
   else
     return (wdir', fs')
-magic s ["cat"] = do
+magic s (Cat []) = do
   x <- getLine 
   go x
   where go "." = return s
@@ -93,7 +125,7 @@ magic s ["cat"] = do
           putStrLn str 
           str' <- getLine
           go str' 
-magic (wdir, fs) ("cat":arg:args) = do
+magic (wdir, fs) (Cat (arg:args)) = do
   go [] (arg:args)
   where go :: String -> [String] -> IO (String, FileSystem) 
         go content [] = putStrLn content >> return (wdir, fs)
@@ -107,23 +139,14 @@ magic (wdir, fs) ("cat":arg:args) = do
           (y:path) <- mix wdir x 
           (res, _) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
           go (content ++ res ++ "\n") xs 
-
-magic s ["rm"] = do
-  putStrLn "rm: missing operand"
-  return s
-magic (wdir, fs) ["rm", arg] = do 
-  (x:filteredPath) <- mix wdir arg
-  (res, fs') <- search fs (intercalate "/" (x:filteredPath)) ("/" : filteredPath) rm (Just fs)
-  putStr res
-  return (wdir, fs')
-magic (wdir, fs) ("rm":arg:args) = do
-  (x:filteredPath) <- mix wdir arg
-  (res, fs') <- search fs (intercalate "/" (x:filteredPath)) ("/" : filteredPath) rm (Just fs)
-  putStr res
-  magic (wdir, fs') ("rm":args)   
-magic s (x:_) = do
-  putStrLn (x ++ ": command not found")
-  return s 
+magic (wdir, fs) (Rm (arg N.:| args)) = do
+  go (wdir, fs) (arg : args)
+  where go s [] = return s
+        go (wd, f) (x : xs) = do
+          (y:filteredPath) <- mix wd x
+          (res, f') <- search f (intercalate "/" (y:filteredPath)) ("/" : filteredPath) rm (Just f)
+          putStr res
+          go (wd,f') xs
 
 search :: FileSystem -> String -> [String] -> (FileSystem -> String -> FileSystem -> IO (String, FileSystem)) -> Maybe FileSystem -> IO (Path, FileSystem)
 search fs msg [] _ _ = putStr ("Cannot access \'" ++ msg ++ "\': No such file or directory\n") >> return ([], fs)
@@ -184,9 +207,9 @@ rm fs msg (Regular _) = return ([], fs')
         fs' = fCopy fs [] path deleteFile 
         deleteFile :: String -> String -> [FileSystem] -> [FileSystem]
         deleteFile _ _ [] = []
-        deleteFile name x (Regular f : cont) 
-          | name == fileName f = deleteFile name x cont 
-          | otherwise = Regular f : deleteFile name x cont 
+        deleteFile x name (Regular f : cont) 
+          | name == fileName f = deleteFile x name cont 
+          | otherwise = Regular f : deleteFile x name cont 
         deleteFile name x (Directory d : cont) = Directory d : deleteFile name x cont 
 
 fCopy :: FileSystem -> String -> [String] -> (String -> String -> [FileSystem] -> [FileSystem]) -> FileSystem
