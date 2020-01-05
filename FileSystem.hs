@@ -4,6 +4,7 @@
 
 import Data.List
 import qualified Data.List.NonEmpty as N
+import System.Directory
 
 type Path = String
 data RegularFile = RegularFile { fileName :: String, fileContent :: String } deriving (Show, Read)
@@ -24,7 +25,7 @@ data Command
 main :: IO ()
 main = do
   f <- deserialise
-  (dir, fs) <- createPair "/" f 
+  (dir, fs) <- createPair "/" f
   (_, fs') <- loop (dir, fs)
   serialise fs'
 
@@ -38,7 +39,7 @@ parseCommand ["cd"] = Right (Cd Nothing)
 parseCommand ["cd", path] = Right (Cd (Just path))
 parseCommand ("cd":_) = Left "cd: too many arguments"
 parseCommand ("cat":files) = Right (Cat files)
-parseCommand ["rm"] = Left "rm: missing operand" 
+parseCommand ["rm"] = Left "rm: missing operand"
 parseCommand ("rm": x : xs) = Right (Rm (x N.:| xs))
 parseCommand [] = Left ""
 parseCommand _ = Left "invalid command"
@@ -52,21 +53,24 @@ loop (path, fs) = do
     Left message -> do
       putStr message
       loop (path, fs)
-    Right cmd -> do 
-      s' <- magic (path, fs) cmd 
+    Right cmd -> do
+      s' <- magic (path, fs) cmd
       loop s'
 
 serialise :: FileSystem -> IO ()
 serialise fs = writeFile "test.txt" (show fs)
 
-deserialise :: IO FileSystem 
-deserialise = read <$> readFile "test.txt"  
+deserialise :: IO FileSystem
+deserialise = do
+  fileExists <- doesFileExist "test1.txt"
+  if fileExists then read <$> readFile "test1.txt"
+  else return (Directory (Dir "/" []))
 
 splitByDelimeter :: String -> Char -> [String]
-splitByDelimeter str del = splitHelper str del [] 
+splitByDelimeter str del = splitHelper str del []
   where splitHelper :: String -> Char -> [String] -> [String]
         splitHelper "" _ res = reverse res
-        splitHelper s d res = splitHelper rest d (takeWhile (/= del) s : res) 
+        splitHelper s d res = splitHelper rest d (takeWhile (/= del) s : res)
           where rest' = dropWhile (/= del) s
                 rest = if null rest' then [] else tail rest'
 
@@ -82,7 +86,7 @@ filterPath path = filterPathHelper path []
 mix :: String -> String -> IO [String]
 mix wdir arg = do
   (x:argpath) <- return (splitByDelimeter arg '/')
-  if x == "" then 
+  if x == "" then
     return (filterPath (x : argpath))
   else do
     let currpath = splitByDelimeter wdir '/'
@@ -111,20 +115,20 @@ magic (wdir, fs) (Ls (arg:args)) = do
           go xs
 magic (_, fs) (Cd Nothing) = return ("/", fs)
 magic (wdir, fs) (Cd (Just arg)) = do
-  (x:filteredPath) <- mix wdir arg 
+  (x:filteredPath) <- mix wdir arg
   (wdir', fs') <-search fs (intercalate "/" (x:filteredPath) ++ "/")  ("/" : filteredPath) cd (Just fs)
   if null wdir' then
     return (wdir, fs')
   else
     return (wdir', fs')
 magic s (Cat []) = do
-  x <- getLine 
+  x <- getLine
   go x
   where go "." = return s
         go str = do
-          putStrLn str 
+          putStrLn str
           str' <- getLine
-          go str' 
+          go str'
 magic (wdir, fs) (Cat (arg:args)) = do
   go [] (arg:args)
   where go :: String -> [String] -> IO (String, FileSystem) 
@@ -136,7 +140,7 @@ magic (wdir, fs) (Cat (arg:args)) = do
           putStrLn "error: should have only one output file"
           return (wdir, fs)
         go content (x:xs) = do
-          (y:path) <- mix wdir x 
+          (y:path) <- mix wdir x
           (res, _) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
           go (content ++ res ++ "\n") xs 
 magic (wdir, fs) (Rm (arg N.:| args)) = do
@@ -183,34 +187,34 @@ ls fs _ (Directory dir) = return (printAll (dirContent dir), fs)
 
 cd :: FileSystem -> String -> FileSystem -> IO (String, FileSystem)
 cd fs newpath (Regular _) = putStr ("cd: \'" ++ newpath ++ "\': Not a directory\n") >> return ([], fs)
-cd fs newpath (Directory _) = return (newpath, fs) 
+cd fs newpath (Directory _) = return (newpath, fs)
 
 getContent :: FileSystem -> String -> FileSystem -> IO (String, FileSystem)
 getContent fs msg (Directory _) = putStr ("cat: \'" ++ msg ++ "\': Is a directory\n") >> return ([], fs)
 getContent fs _ (Regular file) = return (fileContent file, fs)
 
-catToFile :: String -> String -> [FileSystem] -> [FileSystem] 
+catToFile :: String -> String -> [FileSystem] -> [FileSystem]
 catToFile content name [] = [Regular (RegularFile name content)]
-catToFile content name [Regular f] 
-  | fileName f == name = [Regular (RegularFile name content)] 
+catToFile content name [Regular f]
+  | fileName f == name = [Regular (RegularFile name content)]
   | otherwise = [Regular f, Regular (RegularFile name content)]
 catToFile content name [Directory d] = [Directory d, Regular (RegularFile name content)]
-catToFile content name (Regular f : xs) 
-  | fileName f == name = Regular (RegularFile name content) : xs 
+catToFile content name (Regular f : xs)
+  | fileName f == name = Regular (RegularFile name content) : xs
   | otherwise = Regular f : catToFile content name xs
-catToFile content name (Directory d : xs) = Directory d : catToFile content name xs  
+catToFile content name (Directory d : xs) = Directory d : catToFile content name xs
 
 rm :: FileSystem -> String -> FileSystem -> IO (String, FileSystem)
 rm fs msg (Directory _) = putStr ("rm: cannot remove \'" ++ msg ++ "\': is directory\n") >> return ([], fs)
 rm fs msg (Regular _) = return ([], fs')
-  where (_:path) = splitByDelimeter msg '/' 
-        fs' = fCopy fs [] path deleteFile 
+  where (_:path) = splitByDelimeter msg '/'
+        fs' = fCopy fs [] path deleteFile
         deleteFile :: String -> String -> [FileSystem] -> [FileSystem]
         deleteFile _ _ [] = []
-        deleteFile x name (Regular f : cont) 
-          | name == fileName f = deleteFile x name cont 
-          | otherwise = Regular f : deleteFile x name cont 
-        deleteFile name x (Directory d : cont) = Directory d : deleteFile name x cont 
+        deleteFile x name (Regular f : cont)
+          | name == fileName f = deleteFile x name cont
+          | otherwise = Regular f : deleteFile x name cont
+        deleteFile name x (Directory d : cont) = Directory d : deleteFile name x cont
 
 fCopy :: FileSystem -> String -> [String] -> (String -> String -> [FileSystem] -> [FileSystem]) -> FileSystem
 fCopy (Regular f) _ _ _ = Regular f
@@ -222,18 +226,11 @@ fCopy (Directory (Dir name dircont)) content (x:xs) g = Directory (Dir name (cop
         copyDirContent [] _ = []
         copyDirContent [Regular f] _ = [Regular f]
         copyDirContent [Directory d] [] = [Directory d]
-        copyDirContent (el:rest) [] = el : copyDirContent rest []  
-        copyDirContent [Directory d] (y:ys) 
-          | dirName d == y = [fCopy (Directory d) content ys g] 
+        copyDirContent (el:rest) [] = el : copyDirContent rest []
+        copyDirContent [Directory d] (y:ys)
+          | dirName d == y = [fCopy (Directory d) content ys g]
           | otherwise = [fCopy (Directory d) content (y:ys) g]
         copyDirContent (Regular f : cont) (y:ys) = fCopy (Regular f) content (y:ys) g : copyDirContent cont (y:ys)
-        copyDirContent (Directory d : cont) (y:ys) 
-          | dirName d == y = fCopy (Directory d) content ys g : copyDirContent cont (y:ys) 
+        copyDirContent (Directory d : cont) (y:ys)
+          | dirName d == y = fCopy (Directory d) content ys g : copyDirContent cont (y:ys)
           | otherwise = fCopy (Directory d) content (y:ys) g : copyDirContent cont (y:ys)
-        
-
--- using these for testing
---
--- file = RegularFile "file1.txt" "Hello" 
--- file2 = RegularFile "file2.txt" "Bye!"
--- root = Directory (Dir "/" [Directory (Dir "home" [Regular file, Directory (Dir "etc" [Regular file2])]), Regular file2]) 
