@@ -29,8 +29,10 @@ main = do
   (_, fs') <- loop (dir, fs)
   serialise fs'
 
+
 createPair :: Path -> FileSystem -> IO (Path, FileSystem)
 createPair dir fs = return (dir, fs)
+
 
 parseCommand :: [String] -> Either String Command
 parseCommand ("pwd":_) = Right Pwd
@@ -43,6 +45,7 @@ parseCommand ["rm"] = Left "rm: missing operand"
 parseCommand ("rm": x : xs) = Right (Rm (x N.:| xs))
 parseCommand [] = Left ""
 parseCommand _ = Left "invalid command"
+
 
 loop :: (Path, FileSystem) -> IO (Path, FileSystem)
 loop (path, fs) = do
@@ -57,14 +60,17 @@ loop (path, fs) = do
       s' <- magic (path, fs) cmd
       loop s'
 
+
 serialise :: FileSystem -> IO ()
 serialise fs = writeFile "test.txt" (show fs)
 
+
 deserialise :: IO FileSystem
 deserialise = do
-  fileExists <- doesFileExist "test1.txt"
-  if fileExists then read <$> readFile "test1.txt"
+  fileExists <- doesFileExist "test.txt"
+  if fileExists then read <$> readFile "test.txt"
   else return (Directory (Dir "/" []))
+
 
 splitByDelimeter :: String -> Char -> [String]
 splitByDelimeter str del = splitHelper str del []
@@ -95,6 +101,7 @@ mix wdir arg = do
 
 magic :: (String, FileSystem) -> Command -> IO (String, FileSystem)
 magic s Pwd = pwd s
+
 magic (wdir, fs) (Ls []) = do
   (_:currpath) <- return (splitByDelimeter wdir '/')
   (res,fs') <- search fs [] ("/" : currpath) ls (Just fs)
@@ -113,6 +120,7 @@ magic (wdir, fs) (Ls (arg:args)) = do
           (res, _) <- search fs x ("/" : filteredPath) ls (Just fs)
           putStr (x ++ ":\n" ++ res)
           go xs
+
 magic (_, fs) (Cd Nothing) = return ("/", fs)
 magic (wdir, fs) (Cd (Just arg)) = do
   (x:filteredPath) <- mix wdir arg
@@ -121,6 +129,7 @@ magic (wdir, fs) (Cd (Just arg)) = do
     return (wdir, fs')
   else
     return (wdir', fs')
+
 magic s (Cat []) = do
   x <- getLine
   go x
@@ -129,10 +138,30 @@ magic s (Cat []) = do
           putStrLn str
           str' <- getLine
           go str'
+magic (wdir, fs) (Cat [">", file]) = do
+  x <- getLine
+  content <- go x []
+  (_:fpath) <- mix wdir file
+  return (wdir, fCopy fs content fpath catToFile)
+  where go "." result = return result
+        go str [] = do
+          str' <- getLine
+          go str' str
+        go str result = do
+          str' <- getLine
+          go str' (result ++ "\n" ++ str)
 magic (wdir, fs) (Cat (arg:args)) = do
   go [] (arg:args)
   where go :: String -> [String] -> IO (String, FileSystem) 
         go content [] = putStrLn content >> return (wdir, fs)
+        go content [file] = do
+          (y:path) <- mix wdir file
+          (res,_) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
+          go (content ++ res) []
+        go content [file, ">", outputfile] = do
+          (y:path) <- mix wdir file
+          (res, _) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
+          go (content ++ res) [">", outputfile]
         go content [">", file] = do
           (_:fpath) <- mix wdir file
           return (wdir, fCopy fs content fpath catToFile)
@@ -143,6 +172,7 @@ magic (wdir, fs) (Cat (arg:args)) = do
           (y:path) <- mix wdir x
           (res, _) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
           go (content ++ res ++ "\n") xs 
+
 magic (wdir, fs) (Rm (arg N.:| args)) = do
   go (wdir, fs) (arg : args)
   where go s [] = return s
@@ -151,6 +181,7 @@ magic (wdir, fs) (Rm (arg N.:| args)) = do
           (res, f') <- search f (intercalate "/" (y:filteredPath)) ("/" : filteredPath) rm (Just f)
           putStr res
           go (wd,f') xs
+
 
 search :: FileSystem -> String -> [String] -> (FileSystem -> String -> FileSystem -> IO (String, FileSystem)) -> Maybe FileSystem -> IO (Path, FileSystem)
 search fs msg [] _ _ = putStr ("Cannot access \'" ++ msg ++ "\': No such file or directory\n") >> return ([], fs)
@@ -184,7 +215,6 @@ ls fs _ (Directory dir) = return (printAll (dirContent dir), fs)
         printAll (Regular x : content) = fileName x ++ "  " ++ printAll content
         printAll (Directory d : content) = dirName d ++ "  " ++ printAll content
 
-
 cd :: FileSystem -> String -> FileSystem -> IO (String, FileSystem)
 cd fs newpath (Regular _) = putStr ("cd: \'" ++ newpath ++ "\': Not a directory\n") >> return ([], fs)
 cd fs newpath (Directory _) = return (newpath, fs)
@@ -215,6 +245,7 @@ rm fs msg (Regular _) = return ([], fs')
           | name == fileName f = deleteFile x name cont
           | otherwise = Regular f : deleteFile x name cont
         deleteFile name x (Directory d : cont) = Directory d : deleteFile name x cont
+
 
 fCopy :: FileSystem -> String -> [String] -> (String -> String -> [FileSystem] -> [FileSystem]) -> FileSystem
 fCopy (Regular f) _ _ _ = Regular f
