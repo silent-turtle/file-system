@@ -65,13 +65,13 @@ loop (workdir, fs) = do
 
 
 serialise :: FileSystem -> IO ()
-serialise fs = writeFile "test.txt" (show fs)
+serialise fs = writeFile "filesystem.txt" (show fs)
 
 
 deserialise :: IO FileSystem
 deserialise = do
-  fileExists <- doesFileExist "test.txt"
-  if fileExists then read <$> readFile "test.txt"
+  fileExists <- doesFileExist "filesystem.txt"
+  if fileExists then read <$> readFile "filesystem.txt"
   else return (Directory (Dir "/" []))
 
 
