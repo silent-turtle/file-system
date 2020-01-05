@@ -21,6 +21,7 @@ data Command
   | Cd (Maybe Path)
   | Cat [Path]
   | Rm (N.NonEmpty Path)
+  | Exit
 
 main :: IO ()
 main = do
@@ -43,6 +44,7 @@ parseCommand ("cd":_) = Left "cd: too many arguments"
 parseCommand ("cat":files) = Right (Cat files)
 parseCommand ["rm"] = Left "rm: missing operand"
 parseCommand ("rm": x : xs) = Right (Rm (x N.:| xs))
+parseCommand ("exit":_) = Right Exit
 parseCommand [] = Left ""
 parseCommand _ = Left "invalid command"
 
@@ -54,8 +56,10 @@ loop (path, fs) = do
   let splitCommand = splitByDelimeter command ' '
   case parseCommand splitCommand of
     Left message -> do
-      putStr message
+      putStrLn message
       loop (path, fs)
+    Right Exit -> do
+      return (path, fs)
     Right cmd -> do
       s' <- magic (path, fs) cmd
       loop s'
@@ -100,6 +104,8 @@ mix wdir arg = do
  
 
 magic :: (String, FileSystem) -> Command -> IO (String, FileSystem)
+magic s Exit = return s
+
 magic s Pwd = pwd s
 
 magic (wdir, fs) (Ls []) = do
