@@ -144,10 +144,14 @@ executeCommand s (Cat []) = do
           str' <- getLine
           go str'
 executeCommand (workdir, fs) (Cat [">", file]) = do
-  x <- getLine
-  content <- go x []
-  (_:modifiedPath) <- splitAndModifyPath workdir file
-  return (workdir, modifyFileSystem fs content modifiedPath catToFile)
+  (y:modifiedPath) <- splitAndModifyPath workdir file
+  (res, _) <- search fs (intercalate "/" (y : modifiedPath) ++ "/") ("/" : init modifiedPath) checkIfExists (Just fs)
+  if null res then
+    return (workdir, fs)
+  else do
+    x <- getLine
+    content <- go x []
+    return (workdir, modifyFileSystem fs content modifiedPath catToFile)
   where go :: String -> String -> IO String
         go "." result = return result
         go str [] = do
@@ -169,8 +173,12 @@ executeCommand (workdir, fs) (Cat (arg:args)) = do
           (res, _) <- search fs (intercalate "/" (x : modifiedPath) ++ "/") ("/" : modifiedPath) getContent (Just fs)
           go (content ++ res) [">", outputfile]
         go content [">", file] = do
-          (_:modifiedPath) <- splitAndModifyPath workdir file
-          return (workdir, modifyFileSystem fs content modifiedPath catToFile)
+          (x:modifiedPath) <- splitAndModifyPath workdir file
+          (res, _) <- search fs (intercalate "/" (x : modifiedPath) ++ "/") ("/" : init modifiedPath) checkIfExists (Just fs)
+          if null res then
+            return (workdir, fs)
+          else
+            return (workdir, modifyFileSystem fs content modifiedPath catToFile)
         go _ (">":_) = do
           putStrLn "error: should have only one output file"
           return (workdir, fs)
@@ -242,6 +250,8 @@ rm fs path (Regular _) = return ([], fs')
           | otherwise = Regular f : deleteFile x name cont
         deleteFile x name (Directory d : cont) = Directory d : deleteFile x name cont
 
+checkIfExists :: FileSystem -> Path -> FileSystem -> IO (String, FileSystem)
+checkIfExists fs _ _ = return ("True", fs)
 
 catToFile :: String -> String -> [FileSystem] -> [FileSystem]
 catToFile content name [] = [Regular (RegularFile name content)]
