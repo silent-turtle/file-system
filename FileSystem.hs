@@ -1,7 +1,6 @@
 {-# OPTIONS_GHC -Wall #-}
 {-# OPTIONS_GHC -Werror #-}
 
-
 import Data.List
 import qualified Data.List.NonEmpty as N
 import System.Directory
@@ -50,18 +49,18 @@ parseCommand _ = Left "invalid command"
 
 
 loop :: (Path, FileSystem) -> IO (Path, FileSystem)
-loop (path, fs) = do
-  putStr (path ++ "$ ")
-  command <- getLine
-  let splitCommand = splitByDelimeter command ' '
-  case parseCommand splitCommand of
+loop (workdir, fs) = do
+  putStr (workdir ++ "$ ")
+  input <- getLine
+  let splitInput = splitByDelimeter input ' '
+  case parseCommand splitInput of
     Left message -> do
       putStrLn message
-      loop (path, fs)
+      loop (workdir, fs)
     Right Exit -> do
-      return (path, fs)
-    Right cmd -> do
-      s' <- magic (path, fs) cmd
+      return (workdir, fs)
+    Right command -> do
+      s' <- executeCommand (workdir, fs) command
       loop s'
 
 
@@ -84,59 +83,59 @@ splitByDelimeter str del = splitHelper str del []
           where rest' = dropWhile (/= del) s
                 rest = if null rest' then [] else tail rest'
 
-filterPath :: [String] -> [String]
-filterPath path = filterPathHelper path []
-  where filterPathHelper :: [String] -> [String] -> [String]
-        filterPathHelper [] res = reverse res
-        filterPathHelper [x] res = filterPathHelper [] (x:res)
-        filterPathHelper ("" : ".." : xs) res = filterPathHelper xs ("":res)
-        filterPathHelper (_ : ".." : xs) res = filterPathHelper xs res
-        filterPathHelper (x:xs) res = filterPathHelper xs (x:res)
+modifyPath :: [String] -> [String]
+modifyPath path = modifyPathHelper path []
+  where modifyPathHelper :: [String] -> [String] -> [String]
+        modifyPathHelper [] res = reverse res
+        modifyPathHelper [x] res = modifyPathHelper [] (x:res)
+        modifyPathHelper ("" : ".." : xs) res = modifyPathHelper xs ("":res)
+        modifyPathHelper (_ : ".." : xs) res = modifyPathHelper xs res
+        modifyPathHelper (x:xs) res = modifyPathHelper xs (x:res)
 
-mix :: String -> String -> IO [String]
-mix wdir arg = do
+splitAndModifyPath :: String -> String -> IO [String]
+splitAndModifyPath wdir arg = do
   (x:argpath) <- return (splitByDelimeter arg '/')
   if x == "" then
-    return (filterPath (x : argpath))
+    return (modifyPath (x : argpath))
   else do
     let currpath = splitByDelimeter wdir '/'
-    return (filterPath (currpath ++ (x : argpath)))
+    return (modifyPath (currpath ++ (x : argpath)))
  
 
-magic :: (String, FileSystem) -> Command -> IO (String, FileSystem)
-magic s Exit = return s
+executeCommand :: (Path, FileSystem) -> Command -> IO (Path, FileSystem)
+executeCommand s Exit = return s
 
-magic s Pwd = pwd s
+executeCommand s Pwd = pwd s
 
-magic (wdir, fs) (Ls []) = do
-  (_:currpath) <- return (splitByDelimeter wdir '/')
+executeCommand (workdir, fs) (Ls []) = do
+  (_:currpath) <- return (splitByDelimeter workdir '/')
   (res,fs') <- search fs [] ("/" : currpath) ls (Just fs)
   putStr res
-  return (wdir, fs')
-magic (wdir, fs) (Ls [arg]) = do
-  (_:filteredPath) <- mix wdir arg
-  (res, fs') <- search fs arg ("/" : filteredPath) ls (Just fs)
+  return (workdir, fs')
+executeCommand (workdir, fs) (Ls [arg]) = do
+  (_:modifiedPath) <- splitAndModifyPath workdir arg
+  (res, fs') <- search fs arg ("/" : modifiedPath) ls (Just fs)
   putStr res
-  return (wdir, fs')
-magic (wdir, fs) (Ls (arg:args)) = do
+  return (workdir, fs')
+executeCommand (workdir, fs) (Ls (arg:args)) = do
   go (arg:args)
-  where go [] = return (wdir, fs)
+  where go [] = return (workdir, fs)
         go (x:xs) = do
-          (_:filteredPath) <- mix wdir x
-          (res, _) <- search fs x ("/" : filteredPath) ls (Just fs)
+          (_:modifiedPath) <- splitAndModifyPath workdir x
+          (res, _) <- search fs x ("/" : modifiedPath) ls (Just fs)
           putStr (x ++ ":\n" ++ res)
           go xs
 
-magic (_, fs) (Cd Nothing) = return ("/", fs)
-magic (wdir, fs) (Cd (Just arg)) = do
-  (x:filteredPath) <- mix wdir arg
-  (wdir', fs') <-search fs (intercalate "/" (x:filteredPath) ++ "/")  ("/" : filteredPath) cd (Just fs)
-  if null wdir' then
-    return (wdir, fs')
+executeCommand (_, fs) (Cd Nothing) = return ("/", fs)
+executeCommand (workdir, fs) (Cd (Just arg)) = do
+  (x:modifiedPath) <- splitAndModifyPath workdir arg
+  (workdir', fs') <- search fs (intercalate "/" (x:modifiedPath) ++ "/")  ("/" : modifiedPath) cd (Just fs)
+  if null workdir' then
+    return (workdir, fs')
   else
-    return (wdir', fs')
+    return (workdir', fs')
 
-magic s (Cat []) = do
+executeCommand s (Cat []) = do
   x <- getLine
   go x
   where go "." = return s
@@ -144,65 +143,67 @@ magic s (Cat []) = do
           putStrLn str
           str' <- getLine
           go str'
-magic (wdir, fs) (Cat [">", file]) = do
+executeCommand (workdir, fs) (Cat [">", file]) = do
   x <- getLine
   content <- go x []
-  (_:fpath) <- mix wdir file
-  return (wdir, fCopy fs content fpath catToFile)
-  where go "." result = return result
+  (_:modifiedPath) <- splitAndModifyPath workdir file
+  return (workdir, modifyFileSystem fs content modifiedPath catToFile)
+  where go :: String -> String -> IO String
+        go "." result = return result
         go str [] = do
           str' <- getLine
           go str' str
         go str result = do
           str' <- getLine
           go str' (result ++ "\n" ++ str)
-magic (wdir, fs) (Cat (arg:args)) = do
+executeCommand (workdir, fs) (Cat (arg:args)) = do
   go [] (arg:args)
   where go :: String -> [String] -> IO (String, FileSystem) 
-        go content [] = putStrLn content >> return (wdir, fs)
+        go content [] = putStrLn content >> return (workdir, fs)
         go content [file] = do
-          (y:path) <- mix wdir file
-          (res,_) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
+          (x:modifiedPath) <- splitAndModifyPath workdir file
+          (res,_) <- search fs (intercalate "/" (x : modifiedPath) ++ "/") ("/" : modifiedPath) getContent (Just fs)
           go (content ++ res) []
         go content [file, ">", outputfile] = do
-          (y:path) <- mix wdir file
-          (res, _) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
+          (x:modifiedPath) <- splitAndModifyPath workdir file
+          (res, _) <- search fs (intercalate "/" (x : modifiedPath) ++ "/") ("/" : modifiedPath) getContent (Just fs)
           go (content ++ res) [">", outputfile]
         go content [">", file] = do
-          (_:fpath) <- mix wdir file
-          return (wdir, fCopy fs content fpath catToFile)
+          (_:modifiedPath) <- splitAndModifyPath workdir file
+          return (workdir, modifyFileSystem fs content modifiedPath catToFile)
         go _ (">":_) = do
           putStrLn "error: should have only one output file"
-          return (wdir, fs)
-        go content (x:xs) = do
-          (y:path) <- mix wdir x
-          (res, _) <- search fs (intercalate "/" (y : path) ++ "/") ("/" : path) getContent (Just fs)
-          go (content ++ res ++ "\n") xs 
+          return (workdir, fs)
+        go content (y:ys) = do
+          (x:modifiedPath) <- splitAndModifyPath workdir y
+          (res, _) <- search fs (intercalate "/" (x : modifiedPath) ++ "/") ("/" : modifiedPath) getContent (Just fs)
+          go (content ++ res ++ "\n") ys 
 
-magic (wdir, fs) (Rm (arg N.:| args)) = do
-  go (wdir, fs) (arg : args)
+executeCommand (workdir, fs) (Rm (arg N.:| args)) = do
+  go (workdir, fs) (arg : args)
   where go s [] = return s
-        go (wd, f) (x : xs) = do
-          (y:filteredPath) <- mix wd x
-          (res, f') <- search f (intercalate "/" (y:filteredPath)) ("/" : filteredPath) rm (Just f)
+        go (wd, f) (y : ys) = do
+          (x:modifiedPath) <- splitAndModifyPath wd y
+          (res, f') <- search f (intercalate "/" (x : modifiedPath)) ("/" : modifiedPath) rm (Just f)
           putStr res
-          go (wd,f') xs
+          go (wd,f') ys
 
 
-search :: FileSystem -> String -> [String] -> (FileSystem -> String -> FileSystem -> IO (String, FileSystem)) -> Maybe FileSystem -> IO (Path, FileSystem)
-search fs msg [] _ _ = putStr ("Cannot access \'" ++ msg ++ "\': No such file or directory\n") >> return ([], fs)
-search fs msg _ _ Nothing = putStr ("Cannot access \'" ++ msg ++ "\': No such file or directory\n") >> return ([], fs)
-search fs msg [x] f (Just (Regular file))
-  | x == fileName file = f fs msg (Regular file)
-  | otherwise = search fs msg [] f Nothing
-search fs msg [x] f (Just (Directory dir))
-  | x == dirName dir = f fs msg (Directory dir)
-  | otherwise = search fs msg [] f Nothing
-search fs msg (_:_:_) _ (Just (Regular _)) = putStr ("Cannot access \'" ++ msg ++ "\': No such file or directory\n") >> return ([], fs)
-search fs msg (x:y:xs) f (Just (Directory dir))
-  | x == dirName dir = search fs msg (y:xs) f (find' y (dirContent dir))
-  | otherwise = search fs msg [] f Nothing
-  where find' _ [] = Nothing
+search :: FileSystem -> Path -> [Path] -> (FileSystem -> Path -> FileSystem -> IO (String, FileSystem)) -> Maybe FileSystem -> IO (String, FileSystem)
+search fs path [] _ _ = putStr ("Cannot access \'" ++ path ++ "\': No such file or directory\n") >> return ([], fs)
+search fs path _ _ Nothing = putStr ("Cannot access \'" ++ path ++ "\': No such file or directory\n") >> return ([], fs)
+search fs path [x] f (Just (Regular file))
+  | x == fileName file = f fs path (Regular file)
+  | otherwise = search fs path [] f Nothing
+search fs path [x] f (Just (Directory dir))
+  | x == dirName dir = f fs path (Directory dir)
+  | otherwise = search fs path [] f Nothing
+search fs path (_:_:_) _ (Just (Regular _)) = putStr ("Cannot access \'" ++ path ++ "\': No such file or directory\n") >> return ([], fs)
+search fs path (x:y:xs) f (Just (Directory dir))
+  | x == dirName dir = search fs path (y:xs) f (find' y (dirContent dir))
+  | otherwise = search fs path [] f Nothing
+  where find' :: Path -> [FileSystem] -> Maybe FileSystem 
+        find' _ [] = Nothing
         find' str (Regular file : dirs)
           | fileName file == str = Just (Regular file)
           | otherwise = find' str dirs
@@ -221,13 +222,26 @@ ls fs _ (Directory dir) = return (printAll (dirContent dir), fs)
         printAll (Regular x : content) = fileName x ++ "  " ++ printAll content
         printAll (Directory d : content) = dirName d ++ "  " ++ printAll content
 
-cd :: FileSystem -> String -> FileSystem -> IO (String, FileSystem)
+cd :: FileSystem -> Path -> FileSystem -> IO (String, FileSystem)
 cd fs newpath (Regular _) = putStr ("cd: \'" ++ newpath ++ "\': Not a directory\n") >> return ([], fs)
 cd fs newpath (Directory _) = return (newpath, fs)
 
-getContent :: FileSystem -> String -> FileSystem -> IO (String, FileSystem)
-getContent fs msg (Directory _) = putStr ("cat: \'" ++ msg ++ "\': Is a directory\n") >> return ([], fs)
+getContent :: FileSystem -> Path -> FileSystem -> IO (String, FileSystem)
+getContent fs path (Directory _) = putStr ("cat: \'" ++ path ++ "\': Is a directory\n") >> return ([], fs)
 getContent fs _ (Regular file) = return (fileContent file, fs)
+
+rm :: FileSystem -> Path -> FileSystem -> IO (String, FileSystem)
+rm fs path (Directory _) = putStr ("rm: cannot remove \'" ++ path ++ "\': is directory\n") >> return ([], fs)
+rm fs path (Regular _) = return ([], fs')
+  where (_:splitPath) = splitByDelimeter path '/'
+        fs' = modifyFileSystem fs [] splitPath deleteFile
+        deleteFile :: String -> String -> [FileSystem] -> [FileSystem]
+        deleteFile _ _ [] = []
+        deleteFile x name (Regular f : cont)
+          | name == fileName f = deleteFile x name cont
+          | otherwise = Regular f : deleteFile x name cont
+        deleteFile x name (Directory d : cont) = Directory d : deleteFile x name cont
+
 
 catToFile :: String -> String -> [FileSystem] -> [FileSystem]
 catToFile content name [] = [Regular (RegularFile name content)]
@@ -240,34 +254,21 @@ catToFile content name (Regular f : xs)
   | otherwise = Regular f : catToFile content name xs
 catToFile content name (Directory d : xs) = Directory d : catToFile content name xs
 
-rm :: FileSystem -> String -> FileSystem -> IO (String, FileSystem)
-rm fs msg (Directory _) = putStr ("rm: cannot remove \'" ++ msg ++ "\': is directory\n") >> return ([], fs)
-rm fs msg (Regular _) = return ([], fs')
-  where (_:path) = splitByDelimeter msg '/'
-        fs' = fCopy fs [] path deleteFile
-        deleteFile :: String -> String -> [FileSystem] -> [FileSystem]
-        deleteFile _ _ [] = []
-        deleteFile x name (Regular f : cont)
-          | name == fileName f = deleteFile x name cont
-          | otherwise = Regular f : deleteFile x name cont
-        deleteFile name x (Directory d : cont) = Directory d : deleteFile name x cont
-
-
-fCopy :: FileSystem -> String -> [String] -> (String -> String -> [FileSystem] -> [FileSystem]) -> FileSystem
-fCopy (Regular f) _ _ _ = Regular f
-fCopy (Directory (Dir name [])) _ _ _ = Directory (Dir name [])
-fCopy (Directory d) _ [] _ = Directory d
-fCopy (Directory d) content [filename] g = Directory (Dir (dirName d) (g content filename (dirContent d)))
-fCopy (Directory (Dir name dircont)) content (x:xs) g = Directory (Dir name (copyDirContent dircont (x:xs)))
+modifyFileSystem :: FileSystem -> String -> [String] -> (String -> String -> [FileSystem] -> [FileSystem]) -> FileSystem
+modifyFileSystem (Regular f) _ _ _ = Regular f
+modifyFileSystem (Directory (Dir name [])) _ _ _ = Directory (Dir name [])
+modifyFileSystem (Directory d) _ [] _ = Directory d
+modifyFileSystem (Directory d) content [filename] g = Directory (Dir (dirName d) (g content filename (dirContent d)))
+modifyFileSystem (Directory (Dir name dircont)) content (x:xs) g = Directory (Dir name (copyDirContent dircont (x:xs)))
   where copyDirContent :: [FileSystem] -> [String] -> [FileSystem]
         copyDirContent [] _ = []
         copyDirContent [Regular f] _ = [Regular f]
         copyDirContent [Directory d] [] = [Directory d]
         copyDirContent (el:rest) [] = el : copyDirContent rest []
         copyDirContent [Directory d] (y:ys)
-          | dirName d == y = [fCopy (Directory d) content ys g]
-          | otherwise = [fCopy (Directory d) content (y:ys) g]
-        copyDirContent (Regular f : cont) (y:ys) = fCopy (Regular f) content (y:ys) g : copyDirContent cont (y:ys)
+          | dirName d == y = [modifyFileSystem (Directory d) content ys g]
+          | otherwise = [modifyFileSystem (Directory d) content (y:ys) g]
+        copyDirContent (Regular f : cont) (y:ys) = modifyFileSystem (Regular f) content (y:ys) g : copyDirContent cont (y:ys)
         copyDirContent (Directory d : cont) (y:ys)
-          | dirName d == y = fCopy (Directory d) content ys g : copyDirContent cont (y:ys)
-          | otherwise = fCopy (Directory d) content (y:ys) g : copyDirContent cont (y:ys)
+          | dirName d == y = modifyFileSystem (Directory d) content ys g : copyDirContent cont (y:ys)
+          | otherwise = modifyFileSystem (Directory d) content (y:ys) g : copyDirContent cont (y:ys)
